@@ -1,5 +1,7 @@
 # The Explainable Grover's Search
 
+*This effort is supported by Qollab & IonQ.* Built for the Qollab × IonQ Global Quantum Hackathon 2026 (team The Quantubians).
+
 **Find the Big One** is a browser game that teaches Grover's quantum search algorithm. It also shows *why* each step works.
 
 One of 16 (or 64) items is secretly the target. You cannot see which one. Each **Grover layer** you add makes the target a little bigger and every other item a little smaller. Choose how many layers to use, then measure. Too few layers and the target is still small. Too many and it shrinks again. The game is about finding the sweet spot, about π/4·√N layers.
