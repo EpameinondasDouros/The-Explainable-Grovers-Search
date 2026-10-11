@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en" data-theme="aether">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Explainable Grover's Search</title>
+  <meta name="description" content="Learn Grover's quantum search by making the hidden item bigger, then see exactly why each layer works. Never relies on colour; works with keyboard and screen reader.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@500;600;700;800&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Pick the theme before first paint: saved choice, else the OS "more contrast" setting.
+    try {
+      const saved = localStorage.getItem('grover-theme');
+      const contrast = window.matchMedia('(prefers-contrast: more)').matches;
+      document.documentElement.dataset.theme = saved || (contrast ? 'contrast' : 'aether');
+    } catch { /* storage blocked: keep the default */ }
+  </script>
+</head>
+<body>
+  <a class="skip" href="#board">Skip to the chamber</a>
+
+  <!-- Shared ball gradients; CSS picks them per theme so the target never gets its own colour. -->
+  <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+    <defs>
+      <radialGradient id="ball-grad" cx="35%" cy="30%" r="70%">
+        <stop offset="0%" stop-color="#ffffff"/><stop offset="45%" stop-color="#d9cdea"/><stop offset="100%" stop-color="#5a4d66"/>
+      </radialGradient>
+      <radialGradient id="ball-grad-found" cx="35%" cy="30%" r="70%">
+        <stop offset="0%" stop-color="#ffffff"/><stop offset="30%" stop-color="#c7fff0"/><stop offset="70%" stop-color="#00dfc1"/><stop offset="100%" stop-color="#006a5a"/>
+      </radialGradient>
+    </defs>
+  </svg>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="pulse" aria-hidden="true"></span>
+      <span class="brand-name">The Explainable Grover's Search</span>
+      <span class="chip mono" id="register">N = 16 · 4 qubits</span>
+    </div>
+    <div class="topbar-right">
+      <p class="hotkeys mono" aria-label="Keyboard shortcuts: plus adds a layer, minus removes one, M measures, H gives a hint, N starts a new round.">
+        <kbd>+</kbd><kbd>−</kbd> layers <kbd>M</kbd> measure <kbd>H</kbd> hint <kbd>N</kbd> new
+      </p>
+      <button id="theme" class="btn ghost small" type="button" aria-pressed="false">High contrast</button>
+    </div>
+  </header>
+
+  <main class="lab">
+    <!-- ZONE 1: operator console -->
+    <section class="panel console" aria-labelledby="title">
+      <span class="chip mono accent">Operator console</span>
+      <h1 id="title">Find the Big One</h1>
+      <p class="lede">One item is the target. You cannot tell which, and colour never gives it away. Each <strong>Grover layer</strong> makes the target bigger and every other item smaller. Pick how many layers, then measure.</p>
+
+      <div class="seg" id="sizes" role="group" aria-label="Number of items"></div>
+
+      <div class="controls">
+        <button id="add" class="btn layer" type="button">
+          <span><span class="btn-title">Add a Grover layer</span><span class="btn-sub mono">oracle flip, then mirror</span></span>
+          <span class="btn-icon" aria-hidden="true">+</span>
+        </button>
+        <button id="remove" class="btn" type="button">
+          <span class="btn-title">Remove a layer</span><span class="btn-icon" aria-hidden="true">−</span>
+        </button>
+        <button id="hint" class="btn" type="button">
+          <span class="btn-title">Hint</span><span class="btn-icon mono" aria-hidden="true">?</span>
+        </button>
+        <button id="measure" class="btn hero" type="button"><span>Collapse &amp; measure</span></button>
+        <button id="again" class="btn hero" type="button" hidden><span>New round</span></button>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-row mono"><span>Amplification</span><span id="gauge-k">L = 0 / 3</span></div>
+        <div class="gauge-row"><span>Chance of the big one</span><strong id="gauge-p" class="gauge-p">6.3%</strong></div>
+        <div class="bar" aria-hidden="true"><span id="gauge-bar"></span></div>
+      </div>
+      <p id="readout" class="readout" aria-live="polite"></p>
+
+      <label class="check"><input type="checkbox" id="sound"> Play a tone for the focused item (higher and louder means bigger)</label>
+    </section>
+
+    <!-- ZONE 2: the chamber -->
+    <section class="panel chamber" aria-labelledby="chamber-h">
+      <div class="banner">
+        <h2 id="chamber-h" class="chip mono accent">Superposition chamber</h2>
+        <span class="mono" id="target-spec">Target: hidden</span>
+      </div>
+      <div class="globe-wrap">
+        <div class="globe">
+          <div id="board" class="board" role="grid" aria-label="Items. Use the arrow keys to move. Bigger means more likely to be the target."></div>
+        </div>
+        <div class="pedestal" aria-hidden="true">
+          <div class="slot mono"><span>Detector</span><strong id="detector">—</strong></div>
+        </div>
+      </div>
+      <ol id="circuit" class="circuit mono" aria-label="Your circuit, in order"></ol>
+      <p id="result" class="result" aria-live="assertive"></p>
+    </section>
+
+    <!-- ZONE 3: telemetry -->
+    <section class="panel telemetry" aria-labelledby="chart-h">
+      <span class="chip mono accent">Telemetry</span>
+      <h2 id="chart-h">Chance vs. layers</h2>
+      <canvas id="chart" role="img"></canvas>
+      <ul class="legend mono">
+        <li><span class="key solid" aria-hidden="true"></span>Grover</li>
+        <li><span class="key dashed" aria-hidden="true"></span>Random guess</li>
+        <li><span class="key dot" aria-hidden="true"></span>You</li>
+        <li><span class="key square" aria-hidden="true"></span>Best</li>
+      </ul>
+      <div id="race" class="card"></div>
+      <div class="card warn">
+        <h3 class="mono">Why not more layers?</h3>
+        <p id="overshoot"></p>
+      </div>
+    </section>
+  </main>
+
+  <!-- The "explainable" part: the last layer, step by step, in two pictures of the same state. -->
+  <section class="panel explain" aria-labelledby="explain-h">
+    <div class="explain-head">
+      <div>
+        <span class="chip mono accent">Explain</span>
+        <h2 id="explain-h">Why it works: inside layer <span id="explain-k">1</span></h2>
+      </div>
+      <div class="explain-controls">
+        <div class="seg" id="phases" role="group" aria-label="Step through the last layer">
+          <button type="button" class="btn small" data-phase="0">Before</button>
+          <button type="button" class="btn small" data-phase="1">1 · Flip</button>
+          <button type="button" class="btn small" data-phase="2">2 · Mirror</button>
+        </div>
+        <button id="play" type="button" class="btn small ghost">▶ Play layer</button>
+      </div>
+    </div>
+    <p id="explain-caption" class="caption" aria-live="polite"></p>
+    <div class="explain-grid">
+      <figure>
+        <svg id="amps" viewBox="0 0 640 280" role="img"></svg>
+        <figcaption>Every item's <strong>amplitude</strong> as a bar. The dashed line is the average. The chance of measuring an item is its amplitude squared.</figcaption>
+      </figure>
+      <figure>
+        <svg id="dial" viewBox="-160 -150 320 310" role="img"></svg>
+        <figcaption>The same state as one arrow. Vertical is "the target", horizontal is "everything else". Each layer is two mirrors, and two mirrors make a <strong>rotation</strong>.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <footer class="foot mono">
+    <span>Simulated exactly on a classical computer (Born rule probabilities, browser random sampling). It shows how the algorithm works, not a speed-up on real hardware.</span>
+    <span>Design: Google Stitch · Aether Quantum Lab &amp; Quantum High-Contrast Lab</span>
+  </footer>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
