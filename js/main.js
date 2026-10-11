@@ -3,15 +3,18 @@ import {
   initialState, groverStep, probabilities, optimalIterations, theoreticalProbability, sampleIndex,
 } from './grover_sim.js';
 import { createExplainer } from './explain.js';
+import { createIntro } from './intro.js';
+import { createQuantum } from './quantum.js';
 
 const SIZES = [16, 64];
 const MAX_LAYERS = 40;
+const SHOTS = 1000;
 const $ = (s) => document.querySelector(s);
 const rand = () => crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-const S = { N: 16, target: 0, k: 0, psi: null, shown: null, measured: null, wins: 0, rounds: 0, raf: 0, focus: 0 };
+const S = { N: 16, target: 0, k: 0, psi: null, shown: null, measured: null, measuring: false, wins: 0, rounds: 0, raf: 0, focus: 0 };
 const side = () => Math.round(Math.sqrt(S.N));
 const qubits = () => Math.log2(S.N);
 const ket = (i) => `|${i.toString(2).padStart(qubits(), '0')}⟩`;
@@ -23,6 +26,23 @@ const explainer = createExplainer({
   amps: $('#amps'), dial: $('#dial'), caption: $('#explain-caption'), kLabel: $('#explain-k'),
   phases: $('#phases'), play: $('#play'), reduced,
 });
+const intro = createIntro({
+  story: $('#story'), text: $('#story-text'), dots: $('#story-dots'), next: $('#story-next'), skip: $('#story-skip'),
+  lab: $('.lab'), console: $('.console'), board: $('#board'), onDone: () => $('#add').focus(),
+});
+let briefed = false; // the story plays once, after the first fill
+
+// ---------- quantum backend: measurements run the real Qiskit circuit when the platform provides one
+const quantum = createQuantum({ onStatus: showEngine });
+function showEngine({ state, name, reason }) {
+  const chip = $('#engine');
+  chip.dataset.state = state;
+  chip.textContent = state === 'online' ? `Backend: ${name}` : state === 'connecting' ? 'Backend: connecting…' : 'Exact simulation';
+  chip.title = state === 'offline' ? `No quantum backend (${reason}). Measurements sample the exact simulation.` : '';
+  $('#engine-note').textContent = state === 'online'
+    ? `Measurements run your Grover circuit in Qiskit on ${name}. The bars and dial show the exact amplitudes that circuit should produce.`
+    : 'Simulated exactly on a classical computer (Born rule probabilities, browser random sampling). It shows how the algorithm works, not a speed-up on real hardware.';
+}
 
 // ---------- theme: the two Stitch design systems
 function setTheme(name) {
@@ -66,6 +86,7 @@ function buildSizes() {
 function buildBoard() {
   const board = $('#board');
   board.style.gridTemplateColumns = `repeat(${side()}, 1fr)`;
+  board.style.setProperty('--n', S.N);
   board.replaceChildren();
   const showNumbers = S.N <= 16;
   for (let i = 0; i < S.N; i++) {
@@ -75,9 +96,13 @@ function buildBoard() {
     b.setAttribute('role', 'gridcell');
     b.dataset.i = i;
     b.tabIndex = i === S.focus ? 0 : -1;
+    // drop order, row (how far it falls) and a random candy colour; hues near red are skipped on purpose
+    b.style.setProperty('--i', i);
+    b.style.setProperty('--r', Math.floor(i / side()));
+    b.style.setProperty('--gum', `hsl(${30 + Math.floor(rand() * 300)} 85% 62%)`);
     b.innerHTML = '<svg viewBox="-50 -50 100 100" aria-hidden="true">'
       + '<circle class="ring outer" r="49"></circle><circle class="ring" r="42"></circle>'
-      + '<circle class="ball" r="10"></circle>'
+      + '<circle class="ball" r="10"></circle><circle class="gum" r="10"></circle>'
       + (showNumbers ? `<text class="num" x="-46" y="-32">${i + 1}</text>` : '')
       + '<text class="tag" text-anchor="middle" y="5"></text></svg>';
     b.addEventListener('focus', () => { S.focus = i; tone(ratio(S.shown[i])); });
@@ -120,7 +145,9 @@ function focusCell(i) {
 
 // ---------- rounds
 function newRound(N) {
+  if (S.measuring) return;
   cancelAnimationFrame(S.raf);
+  S.shots = null;
   S.N = N; S.k = 0; S.measured = null; S.focus = 0;
   S.target = Math.floor(rand() * N);
   S.psi = initialState(N);
@@ -130,10 +157,28 @@ function newRound(N) {
   buildBoard();
   sync(false);
   announce(`New round with ${N} items. All items are the same size.`);
+  dropBalls().then(() => {
+    if (briefed) { $('#board').classList.remove('gum'); return; }
+    briefed = true;
+    intro.start(N);
+  });
+}
+
+// The machine fills up: every ball falls into its slot, in colour. The briefing (or the next round) drains the colour.
+function dropBalls() {
+  const board = $('#board');
+  board.classList.add('gum');
+  if (reduced) return Promise.resolve();
+  board.classList.add('drop');
+  return new Promise((resolve) => {
+    const done = () => { board.classList.remove('drop'); resolve(); };
+    board.lastElementChild.querySelector('svg').addEventListener('animationend', done, { once: true });
+    setTimeout(done, 3000); // safety net if the animation never reports back
+  });
 }
 
 function setLayers(k) {
-  if (S.measured) return;
+  if (S.measured || S.measuring) return;
   S.k = Math.max(0, Math.min(MAX_LAYERS, k));
   S.psi = initialState(S.N);
   for (let i = 0; i < S.k; i++) groverStep(S.psi, S.target);
@@ -146,10 +191,13 @@ function sync(animate) {
   const p = probabilities(S.psi)[S.target];
   const ko = optimalIterations(S.N);
   const done = !!S.measured;
-  $('#add').disabled = done || S.k >= MAX_LAYERS;
-  $('#remove').disabled = done || S.k === 0;
-  $('#hint').disabled = done;
+  const busy = S.measuring;
+  $('#add').disabled = done || busy || S.k >= MAX_LAYERS;
+  $('#remove').disabled = done || busy || S.k === 0;
+  $('#hint').disabled = done || busy;
   $('#measure').hidden = done;
+  $('#measure').disabled = busy;
+  $('#measure span').textContent = busy ? 'Measuring…' : 'Collapse & measure';
   $('#again').hidden = !done;
   $('#gauge-k').textContent = `L = ${S.k} / ${ko}`;
   $('#gauge-p').textContent = pctf(p);
@@ -161,6 +209,7 @@ function sync(animate) {
   drawChart();
   drawRace(p);
   drawOvershoot();
+  drawShots();
   if (!done) explainer.update(S.N, S.target, S.k);
   if (animate && !reduced) tween(); else { S.shown = Float64Array.from(S.psi); drawBoard(); }
 }
@@ -184,6 +233,7 @@ function drawBoard() {
     // radius follows amplitude: starts at 20% of the cell, capped so circles stay inside the cell
     const r = Math.min(46, 20 * ratio(S.shown[i]));
     c.querySelector('.ball').setAttribute('r', r.toFixed(2));
+    c.querySelector('.gum').setAttribute('r', r.toFixed(2));
     c.setAttribute('aria-label', label(i));
     const isTarget = !!S.measured && i === S.target;
     const isPick = !!S.measured && i === S.measured.index;
@@ -217,17 +267,63 @@ function hint() {
   announce(`Hint: about ${plural(k, 'layer')} gives the best chance, ${pctf(theoreticalProbability(S.N, k))}. That is roughly π/4 × √${S.N}. Fewer is weaker, and far too many makes the target shrink again.`);
 }
 
-function measure() {
-  if (S.measured) return;
+// One shot of the real circuit when there is a backend; otherwise one sample of the exact simulation.
+async function measure() {
+  if (S.measured || S.measuring) return;
   const probs = probabilities(S.psi);
-  const index = sampleIndex(probs, rand());
-  S.measured = { index, hit: index === S.target };
+  const round = { N: S.N, target: S.target, k: S.k };
+  let index = null, source = 'the exact simulation', stats = null, note = '';
+  if (quantum.state === 'connecting') announce('Waiting for the quantum backend…');
+  S.measuring = true;
+  sync(false);
+  if (await quantum.ready) {
+    announce(`Running your circuit on ${quantum.name}…`);
+    try {
+      const out = await quantum.run(round.N, round.target, round.k, 1);
+      index = out.counts.find(([, c]) => c > 0)?.[0] ?? null;
+      source = out.backend;
+      stats = out.stats;
+    } catch (err) {
+      console.warn('[grover] backend run failed, sampling the exact simulation instead:', err);
+      note = ` The backend did not answer (${err?.message || err}), so this sample came from the exact simulation.`;
+    }
+  }
+  S.measuring = false;
+  if (index === null || index < 0 || index >= round.N) index = sampleIndex(probs, rand());
+  S.measured = { index, hit: index === S.target, source, stats };
   S.rounds += 1;
   if (S.measured.hit) S.wins += 1;
   cancelAnimationFrame(S.raf);
   sync(false);
-  announce(`${S.measured.hit ? 'Found it!' : 'Missed.'} You measured item ${index + 1} ${ket(index)}; the target was item ${S.target + 1} ${ket(S.target)}. The chance was ${pctf(probs[S.target])}. Rounds won: ${S.wins} of ${S.rounds}.`);
+  const circuit = stats ? ` The circuit had ${stats.qubits} qubits, ${stats.gates} gates and depth ${stats.depth}.` : '';
+  announce(`${S.measured.hit ? 'Found it!' : 'Missed.'} You measured item ${index + 1} ${ket(index)} on ${source}; the target was item ${S.target + 1} ${ket(S.target)}. The chance was ${pctf(probs[S.target])}.${circuit}${note} Rounds won: ${S.wins} of ${S.rounds}.`);
   focusCell(S.target);
+}
+
+// After the round: run the same circuit many times and compare with the prediction.
+// Locked until you measure, because a histogram would point straight at the target.
+async function runShots() {
+  if (!S.measured || S.shots?.running) return;
+  const round = { N: S.N, target: S.target, k: S.k };
+  S.shots = { running: true };
+  drawShots();
+  let counts, source;
+  try {
+    if (!(await quantum.ready)) throw new Error(quantum.reason);
+    const out = await quantum.run(round.N, round.target, round.k, SHOTS);
+    counts = out.counts; source = out.backend;
+  } catch (err) {
+    if (quantum.state === 'online') console.warn('[grover] backend run failed, sampling the exact simulation instead:', err);
+    const probs = probabilities(S.psi);
+    const tally = new Map();
+    for (let i = 0; i < SHOTS; i++) { const j = sampleIndex(probs, rand()); tally.set(j, (tally.get(j) || 0) + 1); }
+    counts = [...tally.entries()]; source = 'the exact simulation';
+  }
+  if (round.N !== S.N || round.target !== S.target || !S.measured) return; // a new round started meanwhile
+  const hist = new Float64Array(S.N);
+  for (const [i, c] of counts) if (i >= 0 && i < S.N) hist[i] += c;
+  S.shots = { hist, source, total: hist.reduce((a, b) => a + b, 0) };
+  drawShots();
 }
 
 // ---------- telemetry
@@ -283,10 +379,89 @@ function drawRace(p) {
     <tr><th scope="row">Best circuit (${plural(ko, 'layer')})</th><td>${((ko + 1) / po).toFixed(1)}</td></tr></tbody></table>`;
 }
 
+function drawShots() {
+  const btn = $('#shots-run');
+  const out = $('#shots-out');
+  const svg = $('#shots-svg');
+  btn.disabled = !S.measured || !!S.shots?.running;
+  btn.textContent = S.shots?.running ? 'Running…' : `Run ${SHOTS.toLocaleString('en')} shots`;
+  if (!S.shots?.hist) {
+    svg.toggleAttribute('hidden', true); // SVG elements have no .hidden property
+    out.textContent = S.measured ? `Run your ${plural(S.k, 'layer')} circuit ${SHOTS.toLocaleString('en')} times and compare with the prediction.` : 'Unlocks after you measure: a histogram would give the target away.';
+    return;
+  }
+  const { hist, total, source } = S.shots;
+  const pred = theoreticalProbability(S.N, S.k);
+  const got = hist[S.target] / total;
+  out.textContent = `On ${source}: the target came up ${hist[S.target]} of ${total} times (${pctf(got)}). Predicted: ${pctf(pred)}.`;
+  // one bar per item; the target is drawn solid with a tick at its predicted height, the rest outlined
+  const W = 400, H = 120, pad = 6, max = Math.max(pred, ...Array.from(hist, (c) => c / total), 0.05);
+  const slot = (W - 2 * pad) / S.N, bw = Math.max(1, slot * 0.7);
+  const Y = (p) => H - pad - (p / max) * (H - 2 * pad);
+  const ns = 'http://www.w3.org/2000/svg';
+  const kids = [];
+  for (let i = 0; i < S.N; i++) {
+    const r = document.createElementNS(ns, 'rect');
+    const p = hist[i] / total;
+    r.setAttribute('x', (pad + i * slot + (slot - bw) / 2).toFixed(1));
+    r.setAttribute('y', Y(p).toFixed(1));
+    r.setAttribute('width', bw.toFixed(1));
+    r.setAttribute('height', Math.max(1, H - pad - Y(p)).toFixed(1));
+    r.setAttribute('class', i === S.target ? 'hit' : 'rest');
+    kids.push(r);
+  }
+  const tick = document.createElementNS(ns, 'line');
+  const tx = pad + S.target * slot;
+  Object.entries({ x1: tx - 2, x2: tx + slot + 2, y1: Y(pred), y2: Y(pred), class: 'pred' }).forEach(([k, v]) => tick.setAttribute(k, String(v)));
+  kids.push(tick);
+  svg.replaceChildren(...kids);
+  svg.toggleAttribute('hidden', false);
+  svg.setAttribute('aria-label', `Histogram of ${total} shots over ${S.N} items. The target, item ${S.target + 1}, came up ${hist[S.target]} times; the prediction line is at ${pctf(pred)}.`);
+}
+
 function drawOvershoot() {
   const ko = optimalIterations(S.N);
   $('#overshoot').textContent = `With ${S.N} items the peak is ${plural(ko, 'layer')} at ${pctf(theoreticalProbability(S.N, ko))}. `
     + `Each layer turns the state by a fixed angle, so going on to ${2 * ko} layers swings it past the target and the chance falls to ${pctf(theoreticalProbability(S.N, 2 * ko))}.`;
+}
+
+// ---------- windows: telemetry and explain float over the stage; open from the top bar, drag by the title, close with ✕ or Escape
+let zTop = 20;
+const toggleFor = (dlg) => $(`[aria-controls="${dlg.id}"]`);
+function openWindow(dlg) {
+  if (!dlg.open) dlg.show();
+  dlg.style.zIndex = String(++zTop);
+  toggleFor(dlg).setAttribute('aria-expanded', 'true');
+  if (dlg.id === 'telemetry') drawChart(); // the canvas had no size while hidden
+}
+function closeWindow(dlg) {
+  dlg.close();
+  const t = toggleFor(dlg);
+  t.setAttribute('aria-expanded', 'false');
+  t.focus();
+}
+function dragBy(dlg, handle) {
+  let dx = 0, dy = 0;
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return;
+    const r = dlg.getBoundingClientRect();
+    dx = e.clientX - r.left; dy = e.clientY - r.top;
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    const r = dlg.getBoundingClientRect();
+    const x = Math.max(0, Math.min(window.innerWidth - r.width, e.clientX - dx));
+    const y = Math.max(0, Math.min(window.innerHeight - r.height, e.clientY - dy));
+    dlg.style.left = `${x}px`; dlg.style.top = `${y}px`; dlg.style.right = 'auto';
+  });
+}
+for (const dlg of document.querySelectorAll('dialog.window')) {
+  toggleFor(dlg).addEventListener('click', () => (dlg.open ? closeWindow(dlg) : openWindow(dlg)));
+  dlg.querySelector('.window-close').addEventListener('click', () => closeWindow(dlg));
+  dlg.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeWindow(dlg); } });
+  dlg.addEventListener('pointerdown', () => { dlg.style.zIndex = String(++zTop); });
+  dragBy(dlg, dlg.querySelector('.window-head'));
 }
 
 // ---------- controls and hotkeys
@@ -296,8 +471,9 @@ $('#remove').addEventListener('click', () => setLayers(S.k - 1));
 $('#hint').addEventListener('click', hint);
 $('#measure').addEventListener('click', measure);
 $('#again').addEventListener('click', () => newRound(S.N));
+$('#shots-run').addEventListener('click', runShots);
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey || e.target.matches('input, textarea, select')) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.matches('input, textarea, select') || intro.active || S.measuring) return;
   const key = e.key.toLowerCase();
   if (key === '+' || key === '=') setLayers(S.k + 1);
   else if (key === '-' || key === '_' || key === '−') setLayers(S.k - 1);

@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Sora:wght@500;600;700;800&display=swap">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="main.css">
   <script>
     // Pick the theme before first paint: saved choice, else the OS "more contrast" setting.
     try {
@@ -38,21 +38,27 @@
       <span class="pulse" aria-hidden="true"></span>
       <span class="brand-name">The Explainable Grover's Search</span>
       <span class="chip mono" id="register">N = 16 · 4 qubits</span>
+      <span class="chip mono engine" id="engine" role="status" data-state="connecting">Backend: connecting…</span>
     </div>
     <div class="topbar-right">
       <p class="hotkeys mono" aria-label="Keyboard shortcuts: plus adds a layer, minus removes one, M measures, H gives a hint, N starts a new round.">
         <kbd>+</kbd><kbd>−</kbd> layers <kbd>M</kbd> measure <kbd>H</kbd> hint <kbd>N</kbd> new
       </p>
+      <div class="windows-bar" role="group" aria-label="Windows">
+        <button id="toggle-telemetry" class="btn ghost small" type="button" aria-expanded="false" aria-controls="telemetry">Telemetry</button>
+        <button id="toggle-explain" class="btn ghost small" type="button" aria-expanded="false" aria-controls="explain">Explain</button>
+      </div>
       <button id="theme" class="btn ghost small" type="button" aria-pressed="false">High contrast</button>
     </div>
   </header>
 
+  <!-- The stage never scrolls on desktop: console on the left, chamber in the middle. -->
   <main class="lab">
     <!-- ZONE 1: operator console -->
     <section class="panel console" aria-labelledby="title">
       <span class="chip mono accent">Operator console</span>
-      <h1 id="title">Find the Big One</h1>
-      <p class="lede">One item is the target. You cannot tell which, and colour never gives it away. Each <strong>Grover layer</strong> makes the target bigger and every other item smaller. Pick how many layers, then measure.</p>
+      <h1 id="title">Find the Red Item</h1>
+      <p class="lede">You are colourblind: the red item looks just like the rest, and colour never gives it away. Each <strong>Grover layer</strong> asks the oracle and makes the red item bigger while every other item shrinks. Pick how many layers, then measure.</p>
 
       <div class="seg" id="sizes" role="group" aria-label="Number of items"></div>
 
@@ -61,12 +67,14 @@
           <span><span class="btn-title">Add a Grover layer</span><span class="btn-sub mono">oracle flip, then mirror</span></span>
           <span class="btn-icon" aria-hidden="true">+</span>
         </button>
-        <button id="remove" class="btn" type="button">
-          <span class="btn-title">Remove a layer</span><span class="btn-icon" aria-hidden="true">−</span>
-        </button>
-        <button id="hint" class="btn" type="button">
-          <span class="btn-title">Hint</span><span class="btn-icon mono" aria-hidden="true">?</span>
-        </button>
+        <div class="controls-row">
+          <button id="remove" class="btn" type="button">
+            <span class="btn-title">Remove a layer</span><span class="btn-icon" aria-hidden="true">−</span>
+          </button>
+          <button id="hint" class="btn" type="button">
+            <span class="btn-title">Hint</span><span class="btn-icon mono" aria-hidden="true">?</span>
+          </button>
+        </div>
         <button id="measure" class="btn hero" type="button"><span>Collapse &amp; measure</span></button>
         <button id="again" class="btn hero" type="button" hidden><span>New round</span></button>
       </div>
@@ -97,12 +105,29 @@
       </div>
       <ol id="circuit" class="circuit mono" aria-label="Your circuit, in order"></ol>
       <p id="result" class="result" aria-live="assertive"></p>
-    </section>
 
-    <!-- ZONE 3: telemetry -->
-    <section class="panel telemetry" aria-labelledby="chart-h">
-      <span class="chip mono accent">Telemetry</span>
-      <h2 id="chart-h">Chance vs. layers</h2>
+      <!-- Briefing: shown once the balls have dropped in, one line at a time; the console waits until it is done. -->
+      <div id="story" class="story" role="dialog" aria-labelledby="story-h" aria-describedby="story-text" hidden>
+        <span id="story-h" class="chip mono accent">Briefing</span>
+        <p id="story-text" class="story-text"></p>
+        <div class="story-foot">
+          <ol id="story-dots" class="dots" aria-hidden="true"></ol>
+          <div class="story-actions">
+            <button id="story-skip" class="btn small ghost" type="button">Skip</button>
+            <button id="story-next" class="btn small" type="button">Next</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Windows float over the stage. Open them from the top bar, drag by the title bar, close with ✕ or Escape. -->
+  <dialog id="telemetry" class="panel window" aria-labelledby="chart-h" style="--w: 440px">
+    <div class="window-head">
+      <h2 id="chart-h"><span class="chip mono accent">Telemetry</span> Chance vs. layers</h2>
+      <button class="btn small ghost window-close" type="button" aria-label="Close telemetry">✕</button>
+    </div>
+    <div class="window-body">
       <canvas id="chart" role="img"></canvas>
       <ul class="legend mono">
         <li><span class="key solid" aria-hidden="true"></span>Grover</li>
@@ -111,20 +136,26 @@
         <li><span class="key square" aria-hidden="true"></span>Best</li>
       </ul>
       <div id="race" class="card"></div>
+      <div class="card shots">
+        <h3 class="mono">Check it on the real circuit</h3>
+        <p id="shots-out"></p>
+        <svg id="shots-svg" viewBox="0 0 400 120" role="img" hidden></svg>
+        <button id="shots-run" class="btn small" type="button" disabled>Run 1,000 shots</button>
+      </div>
       <div class="card warn">
         <h3 class="mono">Why not more layers?</h3>
         <p id="overshoot"></p>
       </div>
-    </section>
-  </main>
+    </div>
+  </dialog>
 
   <!-- The "explainable" part: the last layer, step by step, in two pictures of the same state. -->
-  <section class="panel explain" aria-labelledby="explain-h">
-    <div class="explain-head">
-      <div>
-        <span class="chip mono accent">Explain</span>
-        <h2 id="explain-h">Why it works: inside layer <span id="explain-k">1</span></h2>
-      </div>
+  <dialog id="explain" class="panel window" aria-labelledby="explain-h" style="--w: 600px">
+    <div class="window-head">
+      <h2 id="explain-h"><span class="chip mono accent">Explain</span> Why it works: inside layer <span id="explain-k">1</span></h2>
+      <button class="btn small ghost window-close" type="button" aria-label="Close explain">✕</button>
+    </div>
+    <div class="window-body">
       <div class="explain-controls">
         <div class="seg" id="phases" role="group" aria-label="Step through the last layer">
           <button type="button" class="btn small" data-phase="0">Before</button>
@@ -133,25 +164,25 @@
         </div>
         <button id="play" type="button" class="btn small ghost">▶ Play layer</button>
       </div>
+      <p id="explain-caption" class="caption" aria-live="polite"></p>
+      <div class="explain-grid">
+        <figure>
+          <svg id="amps" viewBox="0 0 640 280" role="img"></svg>
+          <figcaption>Every item's <strong>amplitude</strong> as a bar. The dashed line is the average. The chance of measuring an item is its amplitude squared.</figcaption>
+        </figure>
+        <figure>
+          <svg id="dial" viewBox="-160 -150 320 310" role="img"></svg>
+          <figcaption>The same state as one arrow. Vertical is "the target", horizontal is "everything else". Each layer is two mirrors, and two mirrors make a <strong>rotation</strong>.</figcaption>
+        </figure>
+      </div>
     </div>
-    <p id="explain-caption" class="caption" aria-live="polite"></p>
-    <div class="explain-grid">
-      <figure>
-        <svg id="amps" viewBox="0 0 640 280" role="img"></svg>
-        <figcaption>Every item's <strong>amplitude</strong> as a bar. The dashed line is the average. The chance of measuring an item is its amplitude squared.</figcaption>
-      </figure>
-      <figure>
-        <svg id="dial" viewBox="-160 -150 320 310" role="img"></svg>
-        <figcaption>The same state as one arrow. Vertical is "the target", horizontal is "everything else". Each layer is two mirrors, and two mirrors make a <strong>rotation</strong>.</figcaption>
-      </figure>
-    </div>
-  </section>
+  </dialog>
 
   <footer class="foot mono">
-    <span>Simulated exactly on a classical computer (Born rule probabilities, browser random sampling). It shows how the algorithm works, not a speed-up on real hardware.</span>
+    <span id="engine-note">Simulated exactly on a classical computer (Born rule probabilities, browser random sampling). It shows how the algorithm works, not a speed-up on real hardware.</span>
     <span>Design: Google Stitch · Aether Quantum Lab &amp; Quantum High-Contrast Lab</span>
   </footer>
 
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="main.js"></script>
 </body>
 </html>

@@ -1,8 +1,9 @@
 // Grover's search, simulated exactly on a classical computer.
-// Pure functions, no DOM: the game UI (grover.js) and the node cross-check test both import this.
+// Pure functions, no DOM: the game UI (main.js) and the node cross-check test both import this.
 //
 // Grover never leaves the real subspace spanned by "the red item" and "everything else", so a
-// real-valued statevector of N amplitudes is enough. One Doubling block = oracle then diffuser.
+// real-valued statevector of N amplitudes is enough. One Grover layer = oracle then diffuser.
+// quantum.js writes the same layer as Qiskit gates for the real backend.
 
 /** Uniform superposition: what the Hadamard layer produces from |0...0>. */
 export function initialState(N) {
@@ -22,14 +23,14 @@ export function diffuse(psi) {
   for (let i = 0; i < psi.length; i++) psi[i] = 2 * mean - psi[i];
 }
 
-/** One Doubling block, in place. */
+/** One Grover layer, in place. */
 export function groverStep(psi, target) {
   oracle(psi, target);
   diffuse(psi);
   return psi;
 }
 
-/** Fresh state after k blocks. */
+/** Fresh state after k layers. */
 export function runGrover(N, target, k) {
   const psi = initialState(N);
   for (let i = 0; i < k; i++) groverStep(psi, target);
@@ -50,7 +51,7 @@ export function theoreticalProbability(N, k) {
   return Math.sin((2 * k + 1) * theta(N)) ** 2;
 }
 
-/** The block count that maximises P(red): round(pi/(4 theta) - 1/2), about (pi/4) sqrt(N). */
+/** The layer count that maximises P(red): round(pi/(4 theta) - 1/2), about (pi/4) sqrt(N). */
 export function optimalIterations(N) {
   return Math.max(0, Math.round(Math.PI / (4 * theta(N)) - 0.5));
 }
